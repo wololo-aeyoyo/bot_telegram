@@ -1,0 +1,19 @@
+{
+  "name": "telegram-ollama-bot",
+  "version": "0.1.0",
+  "description": "Telegram multi-tool bot routed by a local Ollama model: yt-dlp downloads, Spotify playlists, Google Images, and chat fallback",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "ollama": "^0.5.9",
+    "spotify-web-api-node": "^5.0.2",
+    "telegraf": "^4.16.3"
+  }
+}

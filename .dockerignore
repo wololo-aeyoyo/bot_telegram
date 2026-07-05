@@ -1,0 +1,31 @@
+# Dependencies — installed fresh inside the image
+node_modules/
+
+# Environment / secrets — injected at runtime, never baked into the image
+.env
+.env.local
+.env.*.local
+
+# VCS
+.git/
+.gitignore
+
+# Docs / spec — not needed at runtime
+README.md
+telegram-ollama-bot-spec.md
+openapi.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Docker
+.dockerignore
+Dockerfile
