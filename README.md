@@ -67,6 +67,18 @@ invoked anyway).
 node src/index.js
 ```
 
+## Docker
+
+```sh
+docker build -t telegram-multitool-bot .
+docker run -d --restart unless-stopped --env-file .env --name telegram-bot telegram-multitool-bot
+```
+
+The image runs as the non-root `node` user, exposes no ports (the bot uses
+long polling), and takes all configuration from environment variables — in
+Kubernetes, inject them via a Secret (`envFrom.secretRef`) instead of
+`--env-file`. Session state is in-memory, so run exactly one replica.
+
 Bot commands: `/start` (greeting), `/reset` (clear conversation history).
 
 ## Notes
