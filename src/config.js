@@ -21,9 +21,12 @@ export const config = {
       .map((id) => Number(id.trim()))
       .filter((id) => Number.isInteger(id)),
   },
-  ollama: {
-    host: optional("OLLAMA_HOST", "http://localhost:11434"),
-    model: optional("OLLAMA_MODEL", "llama3.1"),
+  // Any OpenAI-compatible chat-completions provider: NVIDIA NIM, local
+  // Ollama (http://localhost:11434/v1), etc.
+  llm: {
+    baseUrl: optional("LLM_BASE_URL", "https://integrate.api.nvidia.com/v1").replace(/\/$/, ""),
+    model: optional("LLM_MODEL", "moonshotai/kimi-k2.5-instruct"),
+    apiKey: optional("LLM_API_KEY"),
   },
   ytdlp: {
     baseUrl: optional("YTDLP_BASE_URL"),
@@ -36,18 +39,24 @@ export const config = {
     refreshToken: optional("SPOTIFY_REFRESH_TOKEN"),
     defaultPlaylistId: optional("SPOTIFY_DEFAULT_PLAYLIST_ID"),
   },
-  googleCse: {
-    apiKey: optional("GOOGLE_CSE_API_KEY"),
-    cx: optional("GOOGLE_CSE_CX"),
+  gelbooru: {
+    apiKey: optional("GELBOORU_API_KEY"),
+    userId: optional("GELBOORU_USER_ID"),
+    // general | sensitive | questionable | explicit | all (no filter)
+    rating: optional("GELBOORU_RATING", "general"),
   },
 };
 
 // Tool credentials are optional at boot so the bot can run with a subset of
 // capabilities; warn so a misconfigured deploy is visible in the logs.
+if (!config.llm.apiKey && !config.llm.baseUrl.includes("localhost") && !config.llm.baseUrl.includes("127.0.0.1")) {
+  console.warn("[config] LLM_API_KEY is empty — a remote provider like NVIDIA will reject requests");
+}
+
 for (const [group, keys] of [
   ["ytdlp", ["baseUrl", "username", "password"]],
   ["spotify", ["clientId", "clientSecret", "refreshToken", "defaultPlaylistId"]],
-  ["googleCse", ["apiKey", "cx"]],
+  ["gelbooru", ["apiKey", "userId"]],
 ]) {
   const missing = keys.filter((k) => !config[group][k]);
   if (missing.length) {

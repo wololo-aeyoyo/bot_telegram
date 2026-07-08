@@ -80,7 +80,7 @@ bot.on("text", async (ctx) => {
 });
 
 bot.launch(() => {
-  console.log(`Bot started as @${bot.botInfo?.username} (model: ${config.ollama.model})`);
+  console.log(`Bot started as @${bot.botInfo?.username} (model: ${config.llm.model} @ ${config.llm.baseUrl})`);
 });
 
 process.once("SIGINT", () => bot.stop("SIGINT"));

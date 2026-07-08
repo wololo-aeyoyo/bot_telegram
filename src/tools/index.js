@@ -1,7 +1,7 @@
 import { config } from "../config.js";
 import { YtDlpClient } from "./ytdlp.js";
 import { addToPlaylist } from "./spotify.js";
-import { searchImages } from "./googleImages.js";
+import { searchImages } from "./gelbooru.js";
 
 export const TOOLS = [
   {
@@ -52,10 +52,15 @@ export const TOOLS = [
     type: "function",
     function: {
       name: "search_images",
-      description: "Search Google Images for a query and return image results",
+      description: "Search Gelbooru (anime/artwork imageboard) for images matching tags",
       parameters: {
         type: "object",
-        properties: { query: { type: "string" } },
+        properties: {
+          query: {
+            type: "string",
+            description: "Space-separated Gelbooru tags; use underscores inside multi-word tags, e.g. 'hatsune_miku blue_hair'"
+          }
+        },
         required: ["query"]
       }
     }
