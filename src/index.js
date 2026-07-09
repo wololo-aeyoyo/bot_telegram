@@ -26,9 +26,31 @@ bot.command("reset", (ctx) => {
   return ctx.reply("Conversation history cleared.");
 });
 
+// The bot only reacts when a message opens with a trigger word. Returns the
+// message stripped of the prefix, or null if the bot should stay silent.
+function matchTrigger(text) {
+  const trimmed = text.trimStart();
+  const lower = trimmed.toLowerCase();
+  for (const prefix of config.telegram.triggerPrefixes) {
+    if (!lower.startsWith(prefix)) continue;
+    // Require the prefix to be a whole word: end of message, or followed by
+    // a space or punctuation ("bot", "bot,", "bot: hi") — not "botanist".
+    const after = trimmed.slice(prefix.length);
+    if (after === "" || /^[\s,.:!?]/.test(after)) {
+      return after.replace(/^[\s,.:!?]+/, "").trimStart();
+    }
+  }
+  return null;
+}
+
 bot.on("text", async (ctx) => {
   const chatId = ctx.chat.id;
-  const userText = ctx.message.text;
+
+  // Only process messages that open with a trigger word; ignore everything
+  // else so the bot stays quiet in a busy friend group.
+  const userText = matchTrigger(ctx.message.text);
+  if (userText === null) return;
+
   let placeholder = null;
 
   try {

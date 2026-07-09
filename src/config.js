@@ -20,6 +20,15 @@ export const config = {
       .split(",")
       .map((id) => Number(id.trim()))
       .filter((id) => Number.isInteger(id)),
+    // In group chats the bot only answers messages that start with one of
+    // these words (case-insensitive). Private chats always get a reply.
+    triggerPrefixes: optional(
+      "TELEGRAM_TRIGGER_PREFIXES",
+      "bot,hey bot,ok bot,yo bot,botto,bottino,oi,ao,robocla,robot"
+    )
+      .split(",")
+      .map((p) => p.trim().toLowerCase())
+      .filter(Boolean),
   },
   // Any OpenAI-compatible chat-completions provider: NVIDIA NIM, local
   // Ollama (http://localhost:11434/v1), etc.
