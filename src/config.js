@@ -25,7 +25,7 @@ export const config = {
   // Ollama (http://localhost:11434/v1), etc.
   llm: {
     baseUrl: optional("LLM_BASE_URL", "https://integrate.api.nvidia.com/v1").replace(/\/$/, ""),
-    model: optional("LLM_MODEL", "moonshotai/kimi-k2.5-instruct"),
+    model: optional("LLM_MODEL", "deepseek-ai/deepseek-v4-flash"),
     apiKey: optional("LLM_API_KEY"),
   },
   ytdlp: {
