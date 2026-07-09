@@ -1,0 +1,65 @@
+// Grafana Alloy: discover Docker containers, tail their stdout, parse the
+// bot's JSON log lines, and push to Loki. This is what makes "logs get scraped
+// by Loki" actually happen — the bot just writes JSON to stdout.
+
+// Discover all running containers via the Docker socket.
+discovery.docker "containers" {
+	host = "unix:///var/run/docker.sock"
+}
+
+// Turn Docker metadata into useful labels. `service_name` comes from the
+// compose service label so each container is identifiable in Loki.
+discovery.relabel "containers" {
+	targets = discovery.docker.containers.targets
+
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/(.*)"
+		target_label  = "container"
+	}
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+		target_label  = "service_name"
+	}
+}
+
+loki.source.docker "containers" {
+	host       = "unix:///var/run/docker.sock"
+	targets    = discovery.relabel.containers.output
+	labels     = { job = "docker" }
+	forward_to = [loki.process.parse.receiver]
+}
+
+// Parse the JSON logs the bot emits. `level` and `service` become indexed
+// labels; `trace_id` becomes structured metadata (high-cardinality, so NOT a
+// label) — that's what Grafana links to Tempo.
+loki.process "parse" {
+	forward_to = [loki.write.default.receiver]
+
+	stage.json {
+		expressions = {
+			level    = "level",
+			service  = "service",
+			trace_id = "trace_id",
+		}
+	}
+
+	stage.labels {
+		values = {
+			level   = "",
+			service = "",
+		}
+	}
+
+	stage.structured_metadata {
+		values = {
+			trace_id = "",
+		}
+	}
+}
+
+loki.write "default" {
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+	}
+}

@@ -3,13 +3,15 @@ import { config } from "./config.js";
 import { routeMessage } from "./router.js";
 import { dispatch } from "./tools/index.js";
 import { getHistory, appendToHistory, clearHistory } from "./session.js";
+import { logger } from "./logger.js";
+import { withSpan } from "./tracing.js";
 
 const bot = new Telegraf(config.telegram.botToken);
 
 // Whitelist check before anything else — silently ignore strangers.
 bot.use((ctx, next) => {
   if (!ctx.from || !config.telegram.allowedUserIds.includes(ctx.from.id)) {
-    console.warn(`[auth] ignored message from unauthorized user ${ctx.from?.id}`);
+    logger.warn({ userId: ctx.from?.id }, "ignored message from unauthorized user");
     return;
   }
   return next();
@@ -51,58 +53,75 @@ bot.on("text", async (ctx) => {
   const userText = matchTrigger(ctx.message.text);
   if (userText === null) return;
 
-  let placeholder = null;
+  // Root span for the whole update — child spans (LLM call, tool dispatch,
+  // outbound http) nest under it, and the trace id lands on every log line.
+  await withSpan(
+    "telegram.message",
+    { "chat.id": chatId, "chat.type": ctx.chat.type, "user.id": ctx.from.id },
+    async (span) => {
+      const log = logger.child({ chatId, userId: ctx.from.id });
+      log.info({ len: userText.length }, "handling message");
+      let placeholder = null;
 
-  try {
-    const route = await routeMessage(userText, getHistory(chatId));
-    appendToHistory(chatId, { role: "user", content: userText });
+      try {
+        const route = await routeMessage(userText, getHistory(chatId));
+        appendToHistory(chatId, { role: "user", content: userText });
+        span.setAttribute("route.type", route.type);
+        if (route.name) span.setAttribute("route.tool", route.name);
 
-    if (route.type === "text") {
-      appendToHistory(chatId, { role: "assistant", content: route.content });
-      await ctx.reply(route.content);
-      return;
-    }
+        if (route.type === "text") {
+          appendToHistory(chatId, { role: "assistant", content: route.content });
+          await ctx.reply(route.content);
+          log.info("replied with text");
+          return;
+        }
 
-    // Tool route: downloads can take 10-30+ seconds, so show progress
-    // immediately and edit the message in place when done.
-    placeholder = await ctx.reply("Working on it...");
-    const result = await dispatch(route.name, route.args);
+        // Tool route: downloads can take 10-30+ seconds, so show progress
+        // immediately and edit the message in place when done.
+        placeholder = await ctx.reply("Working on it...");
+        const result = await dispatch(route.name, route.args);
 
-    if (result.type === "media") {
-      await ctx.telegram.deleteMessage(chatId, placeholder.message_id).catch(() => {});
-      await ctx.replyWithMediaGroup(result.media);
-      appendToHistory(chatId, { role: "assistant", content: result.fallbackText });
-    } else if (result.type === "video") {
-      await ctx.telegram
-        .editMessageText(chatId, placeholder.message_id, undefined, "Uploading to Telegram...")
-        .catch(() => {});
-      const file = { source: result.buffer, filename: result.filename };
-      if (result.mimeType.startsWith("video/")) {
-        await ctx.replyWithVideo(file, { caption: result.filename });
-      } else {
-        await ctx.replyWithDocument(file, { caption: result.filename });
+        if (result.type === "media") {
+          await ctx.telegram.deleteMessage(chatId, placeholder.message_id).catch(() => {});
+          await ctx.replyWithMediaGroup(result.media);
+          appendToHistory(chatId, { role: "assistant", content: result.fallbackText });
+        } else if (result.type === "video") {
+          await ctx.telegram
+            .editMessageText(chatId, placeholder.message_id, undefined, "Uploading to Telegram...")
+            .catch(() => {});
+          const file = { source: result.buffer, filename: result.filename };
+          if (result.mimeType.startsWith("video/")) {
+            await ctx.replyWithVideo(file, { caption: result.filename });
+          } else {
+            await ctx.replyWithDocument(file, { caption: result.filename });
+          }
+          await ctx.telegram.deleteMessage(chatId, placeholder.message_id).catch(() => {});
+          appendToHistory(chatId, { role: "assistant", content: result.fallbackText });
+        } else {
+          await ctx.telegram.editMessageText(chatId, placeholder.message_id, undefined, result.text);
+          appendToHistory(chatId, { role: "assistant", content: result.text });
+        }
+        log.info({ tool: route.name, resultType: result.type }, "tool completed");
+      } catch (err) {
+        log.error({ err }, "handler failed");
+        const friendly = "Sorry, something went wrong with that request. 😕";
+        if (placeholder) {
+          await ctx.telegram
+            .editMessageText(chatId, placeholder.message_id, undefined, friendly)
+            .catch(() => {});
+        } else {
+          await ctx.reply(friendly).catch(() => {});
+        }
       }
-      await ctx.telegram.deleteMessage(chatId, placeholder.message_id).catch(() => {});
-      appendToHistory(chatId, { role: "assistant", content: result.fallbackText });
-    } else {
-      await ctx.telegram.editMessageText(chatId, placeholder.message_id, undefined, result.text);
-      appendToHistory(chatId, { role: "assistant", content: result.text });
     }
-  } catch (err) {
-    console.error(`[handler] error for chat ${chatId}:`, err);
-    const friendly = "Sorry, something went wrong with that request. 😕";
-    if (placeholder) {
-      await ctx.telegram
-        .editMessageText(chatId, placeholder.message_id, undefined, friendly)
-        .catch(() => {});
-    } else {
-      await ctx.reply(friendly).catch(() => {});
-    }
-  }
+  );
 });
 
 bot.launch(() => {
-  console.log(`Bot started as @${bot.botInfo?.username} (model: ${config.llm.model} @ ${config.llm.baseUrl})`);
+  logger.info(
+    { username: bot.botInfo?.username, model: config.llm.model, llmBaseUrl: config.llm.baseUrl },
+    "bot started"
+  );
 });
 
 process.once("SIGINT", () => bot.stop("SIGINT"));

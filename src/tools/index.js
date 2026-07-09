@@ -2,6 +2,7 @@ import { config } from "../config.js";
 import { YtDlpClient } from "./ytdlp.js";
 import { addToPlaylist } from "./spotify.js";
 import { searchImages } from "./gelbooru.js";
+import { withSpan } from "../tracing.js";
 
 export const TOOLS = [
   {
@@ -83,6 +84,10 @@ function filenameFromContentDisposition(header) {
  * or { type: "video", buffer, filename, mimeType, fallbackText }.
  */
 export async function dispatch(name, args) {
+  return withSpan("tool.dispatch", { "tool.name": name }, () => dispatchTool(name, args));
+}
+
+async function dispatchTool(name, args) {
   switch (name) {
     case "download_video": {
       // Prefer streaming the file into Telegram as a native video; only

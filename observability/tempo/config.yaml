@@ -1,0 +1,39 @@
+# Single-binary Tempo with local block storage and an OTLP receiver. The bot
+# exports OTLP/HTTP to tempo:4318; Grafana queries it over :3200.
+server:
+  http_listen_port: 3200
+  log_level: warn
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        http:
+          endpoint: 0.0.0.0:4318
+        grpc:
+          endpoint: 0.0.0.0:4317
+
+ingester:
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    block_retention: 168h   # 7 days
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/blocks
+    wal:
+      path: /var/tempo/wal
+
+# Generate span metrics / service graph data locally so the Tempo datasource
+# works standalone without a Prometheus.
+metrics_generator:
+  processors: [local-blocks]
+  storage:
+    path: /var/tempo/generator/wal
+
+overrides:
+  metrics_generator_processors: [local-blocks]

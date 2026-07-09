@@ -1,4 +1,5 @@
 import { config } from "../config.js";
+import { logger } from "../logger.js";
 
 const ENDPOINT = "https://gelbooru.com/index.php";
 const MAX_RESULTS = 5;
@@ -94,7 +95,7 @@ export async function searchImages(query) {
     try {
       photos.push(await downloadImage(c.url));
     } catch (err) {
-      console.warn(`[gelbooru] skipping ${c.url}: ${err.message}`);
+      logger.warn({ url: c.url, err: err.message }, "gelbooru: skipping image");
     }
   }
 

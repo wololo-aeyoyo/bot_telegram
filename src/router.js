@@ -1,5 +1,7 @@
 import { config } from "./config.js";
 import { TOOLS } from "./tools/index.js";
+import { logger } from "./logger.js";
+import { withSpan } from "./tracing.js";
 
 const SYSTEM_PROMPT = `You are a helpful Telegram assistant. Use the provided tools ONLY when the user asks to download a video or audio, add a song to Spotify, or search for images. For anything else — greetings, questions, chat — reply directly with plain text; do NOT invent tools that are not in the list. Keep replies short — this is a chat app.`;
 
@@ -37,30 +39,35 @@ async function chatCompletion(messages, withTools) {
  * tool schemas. Returns either a tool call to dispatch or plain text.
  */
 export async function routeMessage(userText, history) {
-  const messages = [
-    { role: "system", content: SYSTEM_PROMPT },
-    ...history,
-    { role: "user", content: userText },
-  ];
+  return withSpan("llm.route", { "llm.model": config.llm.model }, async (span) => {
+    const messages = [
+      { role: "system", content: SYSTEM_PROMPT },
+      ...history,
+      { role: "user", content: userText },
+    ];
 
-  let msg = await chatCompletion(messages, true);
+    let msg = await chatCompletion(messages, true);
 
-  if (msg.tool_calls?.length) {
-    const call = msg.tool_calls[0];
+    if (msg.tool_calls?.length) {
+      const call = msg.tool_calls[0];
+      span.setAttribute("llm.tool_call", call.function.name);
 
-    if (KNOWN_TOOLS.has(call.function.name)) {
-      // OpenAI protocol sends arguments as a JSON string; some Ollama
-      // versions send an object. Handle both.
-      const rawArgs = call.function.arguments;
-      const args = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
-      return { type: "tool", name: call.function.name, args };
+      if (KNOWN_TOOLS.has(call.function.name)) {
+        // OpenAI protocol sends arguments as a JSON string; some Ollama
+        // versions send an object. Handle both.
+        const rawArgs = call.function.arguments;
+        const args = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
+        logger.info({ tool: call.function.name }, "routed to tool");
+        return { type: "tool", name: call.function.name, args };
+      }
+
+      // The model hallucinated a tool that doesn't exist (small models do this
+      // for plain chat, e.g. a made-up "respond" tool). Re-ask without tools
+      // to force a plain-text reply.
+      logger.warn({ tool: call.function.name }, "model hallucinated unknown tool; re-asking without tools");
+      msg = await chatCompletion(messages, false);
     }
 
-    // The model hallucinated a tool that doesn't exist (small models do this
-    // for plain chat, e.g. a made-up "respond" tool). Re-ask without tools
-    // to force a plain-text reply.
-    msg = await chatCompletion(messages, false);
-  }
-
-  return { type: "text", content: msg.content };
+    return { type: "text", content: msg.content };
+  });
 }

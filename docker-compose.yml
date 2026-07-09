@@ -1,0 +1,104 @@
+# Telegram bot + a self-contained Grafana observability stack (LGTM-ish):
+#   Loki      — logs (Alloy scrapes the bot's stdout into it)
+#   Tempo     — traces (bot exports OTLP straight to it)
+#   Pyroscope — continuous profiles
+#   Grafana   — UI, pre-provisioned with all three datasources + trace<->log<->profile links
+#
+# Usage:
+#   cp .env.example .env   # fill in TELEGRAM_* and LLM_* at minimum
+#   docker compose up -d --build
+#   open http://localhost:3000   (anonymous admin, no login)
+#
+# The observability services are optional: `docker compose up -d bot` runs the
+# bot alone (its exporters no-op unless the endpoints below are reachable).
+
+services:
+  bot:
+    build:
+      context: .
+      target: runner
+    image: ghcr.io/wololo/telegram_bot:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Point the app's telemetry at the stack. These override anything in .env.
+      OTEL_SERVICE_NAME: telegram-bot
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
+      PYROSCOPE_SERVER_ADDRESS: http://pyroscope:4040
+      # JSON logs to stdout — Alloy scrapes them from the Docker socket.
+      LOG_LEVEL: info
+    depends_on:
+      - tempo
+      - pyroscope
+
+  loki:
+    image: grafana/loki:3.4.2
+    restart: unless-stopped
+    command: -config.file=/etc/loki/config.yaml
+    volumes:
+      - ./observability/loki/config.yaml:/etc/loki/config.yaml:ro
+      - loki-data:/loki
+    # Exposed only for debugging; Grafana talks to it over the internal network.
+    expose:
+      - "3100"
+
+  tempo:
+    image: grafana/tempo:2.7.1
+    restart: unless-stopped
+    command: -config.file=/etc/tempo/config.yaml
+    volumes:
+      - ./observability/tempo/config.yaml:/etc/tempo/config.yaml:ro
+      - tempo-data:/var/tempo
+    expose:
+      - "3200"   # Tempo query API (Grafana datasource)
+      - "4317"   # OTLP gRPC
+      - "4318"   # OTLP HTTP (the bot uses this)
+
+  pyroscope:
+    image: grafana/pyroscope:1.13.4
+    restart: unless-stopped
+    expose:
+      - "4040"
+
+  # Grafana Alloy replaces the deprecated Promtail: it discovers Docker
+  # containers, tails their stdout, parses the JSON log lines, and pushes them
+  # to Loki with `service`/`level` labels and `trace_id` as structured metadata.
+  alloy:
+    image: grafana/alloy:v1.7.5
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    depends_on:
+      - loki
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # Local dev convenience: no login wall, land on Explore.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_FEATURE_TOGGLES_ENABLE: traceToProfiles
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - loki
+      - tempo
+      - pyroscope
+
+volumes:
+  loki-data:
+  tempo-data:
+  grafana-data:
+  alloy-data:

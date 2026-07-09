@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { logger } from "./logger.js";
 
 function required(name) {
   const value = process.env[name];
@@ -59,7 +60,7 @@ export const config = {
 // Tool credentials are optional at boot so the bot can run with a subset of
 // capabilities; warn so a misconfigured deploy is visible in the logs.
 if (!config.llm.apiKey && !config.llm.baseUrl.includes("localhost") && !config.llm.baseUrl.includes("127.0.0.1")) {
-  console.warn("[config] LLM_API_KEY is empty — a remote provider like NVIDIA will reject requests");
+  logger.warn("LLM_API_KEY is empty — a remote provider like NVIDIA will reject requests");
 }
 
 for (const [group, keys] of [
@@ -69,6 +70,6 @@ for (const [group, keys] of [
 ]) {
   const missing = keys.filter((k) => !config[group][k]);
   if (missing.length) {
-    console.warn(`[config] ${group} not fully configured (missing: ${missing.join(", ")}) — that tool will fail if invoked`);
+    logger.warn({ group, missing }, "tool not fully configured — it will fail if invoked");
   }
 }
