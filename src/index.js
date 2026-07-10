@@ -14,7 +14,7 @@ const bot = new Telegraf(config.telegram.botToken);
 bot.use((ctx, next) => {
   const chatAllowed = config.telegram.allowedChatIds.includes(ctx.chat?.id);
   const userAllowed = ctx.from && config.telegram.allowedUserIds.includes(ctx.from.id);
-  if (!chatAllowed && !userAllowed) {
+  if (!chatAllowed || !userAllowed) {
     logger.warn(
       { userId: ctx.from?.id, chatId: ctx.chat?.id },
       "ignored message from unauthorized chat/user"
