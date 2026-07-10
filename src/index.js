@@ -8,15 +8,21 @@ import { withSpan } from "./tracing.js";
 
 const bot = new Telegraf(config.telegram.botToken);
 
-// Whitelist check before anything else — silently ignore strangers. A message
-// is allowed if it comes from a whitelisted chat (e.g. a friend group) or from
-// a whitelisted user (for private chats).
+// Whitelist check before anything else — silently ignore strangers. Access is
+// gated by context, not by user alone:
+//   - private chat: allowed only if the sender is in allowedUserIds
+//   - group chat:   allowed only if the group is in allowedChatIds (any member
+//                   may use it, but only inside that group)
+// This means a whitelisted user can't drag the bot into some other random
+// group and use it there.
 bot.use((ctx, next) => {
-  const chatAllowed = config.telegram.allowedChatIds.includes(ctx.chat?.id);
-  const userAllowed = ctx.from && config.telegram.allowedUserIds.includes(ctx.from.id);
-  if (!chatAllowed || !userAllowed) {
+  const isPrivate = ctx.chat?.type === "private";
+  const allowed = isPrivate
+    ? ctx.from && config.telegram.allowedUserIds.includes(ctx.from.id)
+    : config.telegram.allowedChatIds.includes(ctx.chat?.id);
+  if (!allowed) {
     logger.warn(
-      { userId: ctx.from?.id, chatId: ctx.chat?.id },
+      { userId: ctx.from?.id, chatId: ctx.chat?.id, chatType: ctx.chat?.type },
       "ignored message from unauthorized chat/user"
     );
     return;
