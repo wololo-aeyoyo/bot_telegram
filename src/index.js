@@ -8,10 +8,17 @@ import { withSpan } from "./tracing.js";
 
 const bot = new Telegraf(config.telegram.botToken);
 
-// Whitelist check before anything else — silently ignore strangers.
+// Whitelist check before anything else — silently ignore strangers. A message
+// is allowed if it comes from a whitelisted chat (e.g. a friend group) or from
+// a whitelisted user (for private chats).
 bot.use((ctx, next) => {
-  if (!ctx.from || !config.telegram.allowedUserIds.includes(ctx.from.id)) {
-    logger.warn({ userId: ctx.from?.id }, "ignored message from unauthorized user");
+  const chatAllowed = config.telegram.allowedChatIds.includes(ctx.chat?.id);
+  const userAllowed = ctx.from && config.telegram.allowedUserIds.includes(ctx.from.id);
+  if (!chatAllowed && !userAllowed) {
+    logger.warn(
+      { userId: ctx.from?.id, chatId: ctx.chat?.id },
+      "ignored message from unauthorized chat/user"
+    );
     return;
   }
   return next();

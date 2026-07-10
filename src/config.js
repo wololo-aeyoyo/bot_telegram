@@ -21,6 +21,12 @@ export const config = {
       .split(",")
       .map((id) => Number(id.trim()))
       .filter((id) => Number.isInteger(id)),
+    // Whole-chat whitelist (e.g. a friend group). Any member of a listed chat
+    // may use the bot. Group/supergroup ids are negative, e.g. -1001048843664.
+    allowedChatIds: optional("TELEGRAM_ALLOWED_CHAT_IDS")
+      .split(",")
+      .map((id) => Number(id.trim()))
+      .filter((id) => Number.isInteger(id)),
     // In group chats the bot only answers messages that start with one of
     // these words (case-insensitive). Private chats always get a reply.
     triggerPrefixes: optional(
