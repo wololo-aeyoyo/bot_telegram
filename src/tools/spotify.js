@@ -90,5 +90,6 @@ export async function addToPlaylist(songQuery, playlistName) {
   });
 
   const artists = track.artists.map((a) => a.name).join(", ");
-  return `🎵 Added "${track.name}" by ${artists} to the playlist.`;
+  const playlistUrl = `https://open.spotify.com/playlist/${playlistId}`;
+  return `🎵 Added "${track.name}" by ${artists} to the playlist.\n${playlistUrl}`;
 }
