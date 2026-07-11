@@ -90,8 +90,27 @@ export async function dispatch(name, args) {
 async function dispatchTool(name, args) {
   switch (name) {
     case "download_video": {
+      // Ask the backend for metadata first: if the estimated merged
+      // (audio+video) size already exceeds the Telegram cap, skip streaming
+      // entirely and upload to Chibisafe, saving a wasted full download.
+      let approxSize = null;
+      try {
+        const info = await ytdlp.getInfo(args.url);
+        approxSize = info.filesize_approx_bytes ?? null;
+      } catch {
+        // Metadata is best-effort; fall through to the stream path.
+      }
+      if (approxSize && approxSize > MAX_TELEGRAM_UPLOAD_BYTES) {
+        const result = await ytdlp.download(args.url);
+        return {
+          type: "text",
+          text: `✅ ${result.title} (${result.file_size_human})\n${result.chibisafe.url}`,
+        };
+      }
+
       // Prefer streaming the file into Telegram as a native video; only
       // possible when the size is known and under the bot upload limit.
+      // filesize_approx is an estimate, so keep the Content-Length check.
       const stream = await ytdlp.stream(args.url);
       const size = Number(stream.headers.get("content-length"));
 
