@@ -6,7 +6,10 @@ import { getHistory, appendToHistory, clearHistory } from "./session.js";
 import { logger } from "./logger.js";
 import { withSpan } from "./tracing.js";
 
-const bot = new Telegraf(config.telegram.botToken);
+// Telegraf aborts handlers after 90s by default, and that timeout rejects
+// outside our try/catch — an unhandled rejection that crashes the process.
+// Downloads regularly exceed 90s, so give handlers 10 minutes.
+const bot = new Telegraf(config.telegram.botToken, { handlerTimeout: 10 * 60 * 1000 });
 
 // Whitelist check before anything else — silently ignore strangers. Access is
 // gated by context, not by user alone:
