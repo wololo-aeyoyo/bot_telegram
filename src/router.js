@@ -3,7 +3,9 @@ import { TOOLS } from "./tools/index.js";
 import { logger } from "./logger.js";
 import { withSpan } from "./tracing.js";
 
-const SYSTEM_PROMPT = `You are a helpful Telegram assistant. Use the provided tools ONLY when the user asks to download a video or audio, add a song to Spotify, or search for images. For anything else — greetings, questions, chat — reply directly with plain text; do NOT invent tools that are not in the list. Keep replies short — this is a chat app.`;
+const SYSTEM_PROMPT = `You are a helpful Telegram assistant. Use the provided tools ONLY when the user asks to download a video or audio, add a song to Spotify, or search for images. If the user sends a link, call download_video by default (use download_audio only if they ask for audio/mp3/music). You cannot send files yourself — only a tool call delivers them, so never reply with text claiming a video was sent. For anything else — greetings, questions, chat — reply directly with plain text; do NOT invent tools that are not in the list. Keep replies short — this is a chat app.`;
+
+const URL_RE = /https?:\/\/\S+/i;
 
 const KNOWN_TOOLS = new Set(TOOLS.map((t) => t.function.name));
 
@@ -58,7 +60,7 @@ export async function routeMessage(userText, history) {
         const rawArgs = call.function.arguments;
         const args = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
         logger.info({ tool: call.function.name }, "routed to tool");
-        return { type: "tool", name: call.function.name, args };
+        return { type: "tool", name: call.function.name, args, callId: call.id };
       }
 
       // The model hallucinated a tool that doesn't exist (small models do this
@@ -66,6 +68,16 @@ export async function routeMessage(userText, history) {
       // to force a plain-text reply.
       logger.warn({ tool: call.function.name }, "model hallucinated unknown tool; re-asking without tools");
       msg = await chatCompletion(messages, false);
+    }
+
+    // Links default to a video download. Small models sometimes answer a
+    // link with text (e.g. mimicking "Sent video: ...") instead of calling
+    // the tool, so force the download when the message contains a URL.
+    const url = userText.match(URL_RE)?.[0];
+    if (url) {
+      logger.warn("model replied with text to a URL; forcing download_video");
+      span.setAttribute("llm.tool_call", "download_video");
+      return { type: "tool", name: "download_video", args: { url } };
     }
 
     return { type: "text", content: msg.content };

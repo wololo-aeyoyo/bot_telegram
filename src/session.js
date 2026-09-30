@@ -15,6 +15,9 @@ export function appendToHistory(chatId, message) {
   history.push(message);
   // Trim aggressively — local models have small context windows.
   while (history.length > MAX_HISTORY) history.shift();
+  // A tool result is only valid right after its assistant tool call; drop
+  // any orphaned by trimming or the LLM API will reject the request.
+  while (history[0]?.role === "tool") history.shift();
   histories.set(chatId, history);
 }
 

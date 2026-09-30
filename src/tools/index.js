@@ -123,7 +123,7 @@ async function dispatchTool(name, args) {
           buffer,
           filename,
           mimeType: stream.headers.get("content-type") ?? "",
-          fallbackText: `Sent video: ${filename}`,
+          fallbackText: `Video delivered to the user as a file: ${filename}`,
         };
       }
 

@@ -61,6 +61,22 @@ function matchTrigger(text) {
   return null;
 }
 
+// Record a tool turn as a real tool call + tool result rather than a plain
+// assistant message. If history held plain text like "Sent video: x.mp4",
+// the model would learn to reply to links with that text instead of
+// actually calling the tool.
+function appendToolTurn(chatId, route, resultText) {
+  const id = route.callId ?? `call_${Date.now()}`;
+  appendToHistory(chatId, {
+    role: "assistant",
+    content: "",
+    tool_calls: [
+      { id, type: "function", function: { name: route.name, arguments: JSON.stringify(route.args) } },
+    ],
+  });
+  appendToHistory(chatId, { role: "tool", tool_call_id: id, content: resultText });
+}
+
 bot.on("text", async (ctx) => {
   const chatId = ctx.chat.id;
 
@@ -100,7 +116,7 @@ bot.on("text", async (ctx) => {
         if (result.type === "media") {
           await ctx.telegram.deleteMessage(chatId, placeholder.message_id).catch(() => {});
           await ctx.replyWithMediaGroup(result.media);
-          appendToHistory(chatId, { role: "assistant", content: result.fallbackText });
+          appendToolTurn(chatId, route, result.fallbackText);
         } else if (result.type === "video") {
           await ctx.telegram
             .editMessageText(chatId, placeholder.message_id, undefined, "Uploading to Telegram...")
@@ -112,10 +128,10 @@ bot.on("text", async (ctx) => {
             await ctx.replyWithDocument(file, { caption: result.filename });
           }
           await ctx.telegram.deleteMessage(chatId, placeholder.message_id).catch(() => {});
-          appendToHistory(chatId, { role: "assistant", content: result.fallbackText });
+          appendToolTurn(chatId, route, result.fallbackText);
         } else {
           await ctx.telegram.editMessageText(chatId, placeholder.message_id, undefined, result.text);
-          appendToHistory(chatId, { role: "assistant", content: result.text });
+          appendToolTurn(chatId, route, result.text);
         }
         log.info({ tool: route.name, resultType: result.type }, "tool completed");
       } catch (err) {
