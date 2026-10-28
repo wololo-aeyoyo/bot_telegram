@@ -18,10 +18,16 @@ export function groupTurns(entries) {
   return turns;
 }
 
+// A message that was only the trigger word ("Clanker") has no text left once
+// the trigger is stripped; say so instead of handing the model an empty line.
+const userText = (entry) => (entry.text?.trim() ? entry.text : "(no other text: they just called you)");
+
+const userLabel = (entry, timezone) =>
+  speakerLabel({ from: entry.from, replyTo: entry.replyTo, mentions: entry.mentions, date: new Date(entry.ts), timezone });
+
 function renderEntry(entry, timezone) {
   if (entry.type === "user") {
-    const label = speakerLabel({ from: entry.from, replyTo: entry.replyTo, date: new Date(entry.ts), timezone });
-    return { role: "user", content: `${label}\n${entry.text}` };
+    return { role: "user", content: `${userLabel(entry, timezone)}\n${userText(entry)}` };
   }
   if (entry.type === "assistant") {
     const message = { role: "assistant", content: entry.text ?? "" };
@@ -74,13 +80,11 @@ export function renderTurnsAsText(turns, { timezone }) {
     .map((turn) =>
       turn
         .flatMap((entry) => {
-          if (entry.type === "user") {
-            const label = speakerLabel({ from: entry.from, replyTo: entry.replyTo, date: new Date(entry.ts), timezone });
-            return [`${label}\n${entry.text}`];
-          }
+          if (entry.type === "user") return [`${userLabel(entry, timezone)}\n${userText(entry)}`];
+          // The summary is read back by the bot itself, so it is written to "you".
           if (entry.type === "assistant") {
-            const lines = entry.text ? [`bot: ${entry.text}`] : [];
-            for (const c of entry.toolCalls ?? []) lines.push(`bot called ${c.name}(${c.arguments})`);
+            const lines = entry.text ? [`you: ${entry.text}`] : [];
+            for (const c of entry.toolCalls ?? []) lines.push(`you called ${c.name}(${c.arguments})`);
             return lines;
           }
           return [`${entry.name} result: ${entry.text}`];

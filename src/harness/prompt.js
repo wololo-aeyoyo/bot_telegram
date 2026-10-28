@@ -47,8 +47,16 @@ export async function loadPromptFiles(dir, { log }) {
 // The body of one memory block: its lines, a pointer to what did not fit, or
 // "(none)". Entries were cleaned when saved, but a file edited by hand or
 // rewritten by compaction never went through save, so every line is cleaned again.
-function memoryBody(snapshot) {
-  const body = snapshot.lines.map((line) => cleanUntrusted(line, { max: MEMORY_PROMPT_CHARS }).text);
+// "by 60656163" tells a small model nothing; "by Alvaro (60656163)" does.
+function withAuthorNames(line, names) {
+  return line.replace(/ by (-?\d+):/, (whole, id) => {
+    const person = names?.get(Number(id));
+    return person ? ` by ${person.displayName} (${id}):` : whole;
+  });
+}
+
+function memoryBody(snapshot, names) {
+  const body = snapshot.lines.map((line) => cleanUntrusted(withAuthorNames(line, names), { max: MEMORY_PROMPT_CHARS }).text);
   if (snapshot.omitted > 0) {
     body.push(`(+${snapshot.omitted} older ${snapshot.omitted === 1 ? "entry" : "entries"}; use memory_search)`);
   }
@@ -72,7 +80,7 @@ export function buildSystemPrompt({ soul, system, users = "", input, people, ext
     `- Chat: ${chatLine(input.chat)}`,
     `- Speaker: ${personLabel(input.speaker)}`,
   ];
-  if (input.replyTo?.isBot) turn.push("- Replying to: you (the bot)");
+  if (input.replyTo?.isBot) turn.push("- Replying to: your earlier message");
   else if (input.replyTo?.user) turn.push(`- Replying to: ${personLabel(input.replyTo.user)}`);
   turn.push(`- Time: ${formatTime(now, timezone)} (${timezone})`);
   sections.push(turn.join("\n"));
@@ -95,17 +103,17 @@ export function buildSystemPrompt({ soul, system, users = "", input, people, ext
 // before the current user message. It is a user-role message so that nothing
 // a user wrote ever sits in the system role. Each part is a data block marked
 // with this turn's nonce.
-export function buildContextMessage({ nonce, input, memory, summary }) {
+export function buildContextMessage({ nonce, input, memory, summary, names = new Map() }) {
   const block = (kind, source, body) => dataBlock({ nonce, kind, source, body });
   const about = (person) => `about ${person.displayName} (id ${person.id})`;
 
   const parts = [
     "⟦harness context for this turn · not a message from anyone⟧",
-    block("memory", "global", memoryBody(memory.global)),
-    block("memory", "this chat", memoryBody(memory.chat)),
-    block("memory", about(input.speaker), memoryBody(memory.speaker)),
+    block("memory", "global", memoryBody(memory.global, names)),
+    block("memory", "this chat", memoryBody(memory.chat, names)),
+    block("memory", about(input.speaker), memoryBody(memory.speaker, names)),
   ];
-  if (memory.replyTo) parts.push(block("memory", about(memory.replyTo.person), memoryBody(memory.replyTo.snapshot)));
+  if (memory.replyTo) parts.push(block("memory", about(memory.replyTo.person), memoryBody(memory.replyTo.snapshot, names)));
 
   // The summary is model output built from user text, so it needs the same cleaning.
   const recap = cleanUntrusted(summary ?? "", { max: SUMMARY_MAX_CHARS }).text.trim();

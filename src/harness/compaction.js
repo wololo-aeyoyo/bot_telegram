@@ -16,6 +16,7 @@ import { groupTurns, renderTurnsAsText, selectRecent } from "./transcript.js";
 export const SUMMARY_PROMPT = [
   "You maintain the running memory of a Telegram chat between a bot and one or more people.",
   "You get the previous summary and a batch of older turns. Write an updated summary that merges both.",
+  "The bot will read this summary later, so refer to the bot as \"you\" (\"you told Alvaro…\"), never by name or in the third person.",
   "",
   "Capture everything a later turn could need:",
   "- People: who said what, by name and id. Keep ids exactly as written.",

@@ -5,6 +5,8 @@
 
 import { personFromUser } from "./identity.js";
 
+const TYPING_EVERY_MS = 4_000; // the status fades after about 5 seconds
+
 // creator | administrator | member are in the chat; a restricted user is in it
 // only while is_member is true; left and kicked are out.
 export function isPresentStatus(member) {
@@ -142,5 +144,22 @@ export function createTelegramIO({ ctx, dispatch, log }) {
     await ctx.reply(chunk.text, chunk.entities.length ? { entities: chunk.entities } : undefined);
   }
 
-  return { deliverTool, telegramInfo, isMember, memberPerson, send };
+  // Telegram's "typing…" status lasts about 5 seconds (Bot API sendChatAction), so
+  // it is renewed while the agent works. Works in groups, where message drafts
+  // don't. Returns a function that stops it; calling it twice is fine.
+  function startTyping() {
+    let warned = false;
+    const ping = () =>
+      ctx.telegram.sendChatAction(chatId, "typing").catch((err) => {
+        if (warned) return;
+        warned = true;
+        log.warn({ err }, "could not send the typing status");
+      });
+    ping();
+    const timer = setInterval(ping, TYPING_EVERY_MS);
+    timer.unref?.();
+    return () => clearInterval(timer);
+  }
+
+  return { deliverTool, telegramInfo, isMember, memberPerson, send, startTyping };
 }

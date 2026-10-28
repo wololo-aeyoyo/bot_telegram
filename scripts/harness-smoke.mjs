@@ -264,7 +264,7 @@ const dirs = [];
   const io1 = fakeIO();
   await s.agent.handleTurn(msg(ALVARO, "baja https://youtu.be/abc", GROUP), io1);
   const retryPrompt = s.fake.calls[2]?.messages.at(-1)?.content ?? "";
-  check("V1 long post-tool comment rejected with its reason", /rejected: it has \d+ characters; the limit is 60/.test(retryPrompt), retryPrompt.slice(0, 120));
+  check("V1 long post-tool comment rejected with its reason", /was not sent: it has \d+ characters; the limit is 60/.test(retryPrompt), retryPrompt.slice(0, 160));
   check("V1 short retry is what reaches the chat", io1.sent.map((c) => c.text).join("|") === "Video listo, Alvaro.", io1.sent.map((c) => c.text).join("|"));
   // V2: the same comment again is too similar to the stored one; a different one goes out.
   s.fake.queue.push(video("v2"), { content: "Video listo, Alvaro." }, { content: "Otro clip para tu colección." });
@@ -307,6 +307,73 @@ const dirs = [];
   const ticPrompt = s.fake.calls.at(-1).messages.at(-1).content;
   check("V6 reused tic rejected with its reason", /brings back the circuits \(circuitos\) image/.test(ticPrompt), ticPrompt.slice(0, 160));
   check("V6 the tic-free rewrite goes out", io7.sent[0]?.text === "Diagnóstico: exceso de entusiasmo humano.", io7.sent[0]?.text);
+}
+
+// ---------- T. "typing…" while working, off once the reply is out ----------
+{
+  const s = await setup(); dirs.push(s.dir);
+  const events = [];
+  const io = fakeIO();
+  io.startTyping = () => { events.push("typing on"); return () => events.push("typing off"); };
+  const send = io.send;
+  io.send = async (chunk) => { events.push("send"); return send(chunk); };
+  s.fake.queue.push({ content: "Diagnóstico: todo en orden." });
+  await s.agent.handleTurn(msg(ALVARO, "clanker estás?", GROUP), io);
+  check("T1 typing starts before the reply and stops right after it", events.slice(0, 3).join(",") === "typing on,send,typing off", events.join(","));
+}
+
+// ---------- W. Retries never leak: rejected drafts and notes stay out of chat, transcript and history ----------
+{
+  const s = await setup(); dirs.push(s.dir);
+  const first = "Diagnóstico: el grupo sigue funcionando a pesar de todo.";
+  s.fake.queue.push({ content: first });
+  await s.agent.handleTurn(msg(HUMBERTO, "clanker estado", GROUP), fakeIO());
+  // W1: the repeat is rejected; the retry is a meta answer ("aquí va otra versión"), also rejected; the third is clean.
+  s.fake.queue.push({ content: first }, { content: "Perdón, aquí va otra versión: el grupo resiste." }, { content: "Todo en pie, Humberto. Milagrosamente." });
+  const io1 = fakeIO();
+  await s.agent.handleTurn(msg(HUMBERTO, "clanker y ahora?", GROUP), io1);
+  check("W1 a retry that talks about the rewrite never goes out", io1.sent.map((c) => c.text).join("|") === "Todo en pie, Humberto. Milagrosamente.", io1.sent.map((c) => c.text).join("|"));
+  const entries = (await s.transcript.load(GROUP.id)).entries;
+  const stored = JSON.stringify(entries);
+  check("W2 transcript keeps only the reply that went out", entries.filter((e) => e.type === "assistant").map((e) => e.text).join("|") === `${first}|Todo en pie, Humberto. Milagrosamente.`);
+  check("W2 no harness note and no rejected draft in the transcript", !stored.includes("harness") && !stored.includes("otra versión"));
+  const history = JSON.parse((await s.store.readText(`chats/${GROUP.id}/comments.json`)) ?? "{}").reply ?? [];
+  check("W2 similarity history holds only what went out", JSON.stringify(history) === JSON.stringify([first, "Todo en pie, Humberto. Milagrosamente."]), JSON.stringify(history));
+  // W3: retries that come back empty never wipe the answer: the last usable draft goes out and is recorded.
+  const again = "Todo en pie, Humberto. Milagrosamente.";
+  s.fake.queue.push({ content: again }, { content: "" }, { content: "" });
+  const io3 = fakeIO();
+  await s.agent.handleTurn(msg(HUMBERTO, "clanker otra vez?", GROUP), io3);
+  check("W3 empty retries don't erase the reply", io3.sent[0]?.text === again, io3.sent[0]?.text);
+  const after = JSON.parse((await s.store.readText(`chats/${GROUP.id}/comments.json`)) ?? "{}").reply ?? [];
+  check("W3 a reply sent after failed retries is recorded for the next check", after.at(-1) === again);
+}
+
+// ---------- N. Labels a small model can't misread ----------
+{
+  const s = await setup(); dirs.push(s.dir);
+  const HUMB = { id: 456, is_bot: false, first_name: "Humberto", username: "Wololo_aeyoyo" };
+  s.fake.queue.push({ content: "hola" });
+  await s.agent.handleTurn(msg(HUMB, "hola", GROUP), fakeIO());
+  const text = "@Wololo_aeyoyo y @nadie_aqui nunca quisieron ser DM";
+  const input = turnInputFromMessage(
+    { message_id: msgId++, from: ALVARO, chat: GROUP, date: 1793000000 + msgId, text, entities: [{ type: "mention", offset: 0, length: 14 }, { type: "mention", offset: 17, length: 11 }] },
+    { botId: 999, botUsername: "clanker_bot", text },
+  );
+  s.fake.queue.push({ content: "ok" });
+  await s.agent.handleTurn(input, fakeIO());
+  const msgs = s.fake.calls.at(-1).messages;
+  check("N1 @username resolved to the person in the label", /⟦mentions: Humberto · @Wololo_aeyoyo · id 456; @nadie_aqui \(unknown to you\)⟧/.test(msgs.at(-1).content), msgs.at(-1).content.split("\n")[1]);
+  check("N2 context message comes before the history", msgs[1].content.startsWith("⟦harness context") && msgs.at(-1).content.startsWith("⟦from:"));
+  const bare = turnInputFromMessage({ message_id: msgId++, from: ALVARO, chat: GROUP, date: 1793000000 + msgId, text: "Clanker", reply_to_message: { message_id: 1, from: { id: 999, is_bot: true, first_name: "Bot" }, text: "un video" } }, { botId: 999, text: "" });
+  s.fake.queue.push({ content: "¿Qué pasa?" });
+  await s.agent.handleTurn(bare, fakeIO());
+  const last = s.fake.calls.at(-1).messages.at(-1).content;
+  check("N3 reply to the bot reads as its own earlier message", last.includes('⟦replying to your earlier message: "un video"⟧'));
+  check("N3 a message that was only the trigger says so", last.endsWith("(no other text: they just called you)"));
+  await s.agent.recordFailure(msg(ALVARO, "algo", GROUP), "Algo falló de mi lado con eso. Inténtalo otra vez.");
+  const stored = (await s.transcript.load(GROUP.id)).entries.slice(-2);
+  check("N4 a failed turn is stored with the notice as the bot's own reply", stored[0]?.type === "user" && stored[1]?.type === "assistant" && stored[1].text.startsWith("Algo falló"));
 }
 
 // ---------- A. Admins from users.md may forget memories others wrote ----------

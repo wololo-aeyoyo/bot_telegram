@@ -138,6 +138,10 @@ function directedText(ctx) {
   return null;
 }
 
+// What the group sees when a turn fails. It is also stored as the bot's own
+// reply, so a later "wtf?" reads as a reply to the bot.
+const FAILURE_NOTICE = "Algo falló de mi lado con eso. Inténtalo otra vez.";
+
 // The error message is a courtesy: if it can't be sent, log and move on.
 async function replyQuietly(ctx, text, log) {
   try {
@@ -164,12 +168,15 @@ bot.on("text", async (ctx) => {
       const log = logger.child({ chatId, userId: ctx.from.id });
       log.info({ len: userText.length }, "handling message");
 
+      let input = null;
       try {
-        const input = turnInputFromMessage(ctx.message, { botId: ctx.botInfo.id, text: userText });
+        input = turnInputFromMessage(ctx.message, { botId: ctx.botInfo.id, botUsername: ctx.botInfo.username, text: userText });
         await agent.handleTurn(input, createTelegramIO({ ctx, dispatch, log }));
       } catch (err) {
         log.error({ err }, "handler failed");
-        await replyQuietly(ctx, "Sorry, something went wrong with that request. 😕", log);
+        await replyQuietly(ctx, FAILURE_NOTICE, log);
+        // So the bot later knows it sent that notice itself.
+        if (input) await agent.recordFailure(input, FAILURE_NOTICE).catch((recordErr) => log.warn({ err: recordErr }, "could not record the failed turn"));
       }
     }
   );

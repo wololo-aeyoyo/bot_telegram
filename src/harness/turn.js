@@ -36,6 +36,8 @@ const MAX_SENT_MESSAGES = 5;
 // Extra model calls allowed to replace a reply the harness rejected as too long
 // or too repetitive. They come out of the same per-message call budget.
 const MAX_REPLY_RETRIES = 2;
+// Words that show a retry is answering the harness note, not the person.
+const META_RE = /(rechaz|reescrib|nueva versi[oó]n|otra versi[oó]n|m[aá]s cort[oa]|harness|caracteres|rejected|rewrit)/i;
 const SEND_MESSAGE_TOOL = {
   type: "function",
   function: {
@@ -112,6 +114,27 @@ export function createAgent({
 
   // Mention only people the chat can actually reach: the speaker in private,
   // current members in a group. Everyone else renders as a plain name.
+  // The stored user message. @username mentions are resolved against the people
+  // the bot knows here, so the label says who "@Wololo_aeyoyo" is instead of
+  // leaving a small model to guess. replyTo.text goes in full; it is cut when
+  // the turn is written to disk.
+  function userEntryFor(input, candidates) {
+    const byHandle = new Map(candidates.filter((p) => p.username).map((p) => [p.username.toLowerCase(), p]));
+    const mentions = [
+      ...input.mentioned.map((person) => ({ person })),
+      ...(input.handles ?? []).map((handle) => (byHandle.has(handle) ? { person: byHandle.get(handle) } : { handle })),
+    ].filter((m, i, all) => !m.person || all.findIndex((n) => n.person?.id === m.person.id) === i);
+    return {
+      type: "user",
+      ts: input.date.toISOString(),
+      messageId: input.messageId,
+      from: input.speaker,
+      replyTo: input.replyTo,
+      ...(mentions.length ? { mentions } : {}),
+      text: input.text,
+    };
+  }
+
   async function mentionableIds(text, input, known, io) {
     const mentionable = new Set();
     const isPrivate = input.chat.type === "private";
@@ -184,15 +207,7 @@ export function createAgent({
     );
     const known = new Map([...extraPeople, ...listed, input.speaker].map((p) => [p.id, p]));
 
-    // replyTo.text goes in full; it is cut when the turn is written to disk.
-    const userEntry = {
-      type: "user",
-      ts: input.date.toISOString(),
-      messageId: input.messageId,
-      from: input.speaker,
-      replyTo: input.replyTo,
-      text: input.text,
-    };
+    const userEntry = userEntryFor(input, [...known.values()]);
     // One nonce per turn marks every data block of this turn. The model sees it
     // only inside the prompt, which the people who write the data cannot read.
     const nonce = newNonce();
@@ -203,8 +218,10 @@ export function createAgent({
         role: "system",
         content: buildSystemPrompt({ soul, system, users, input, people: listed, extraPeople, timezone, now: now() }),
       },
+      // Oldest first: memory and the summary of earlier turns, then the recent
+      // turns, then the new message last, right where the model answers.
+      buildContextMessage({ nonce, input, memory: snapshots, summary, names: known }),
       ...renderHistory(recent, { timezone }),
-      buildContextMessage({ nonce, input, memory: snapshots, summary }),
       ...renderTurn([userEntry], { timezone }),
     ];
 
@@ -277,24 +294,47 @@ export function createAgent({
         }
         return "Rewrite your reply with the same meaning and language but different words and a different opening.";
       };
+      // Checks and the stored history use the text as the chat would see it:
+      // without Markdown, ids or labels that polishReply strips anyway.
+      const shown = (t) => polishReply(forCheck(t), { maxChars: Infinity });
+      // A small model sometimes answers the harness note instead of the person
+      // ("Perdón, aquí va una versión más corta: …"). Such a retry never goes out.
+      const talksAboutRewrite = (t) => META_RE.test(t);
+
       let current = draft;
+      // What goes out if no attempt passes: the latest usable one, never an empty retry.
+      let fallback = draft;
       for (let attempt = 0; ; attempt++) {
-        const reason = checkReply(forCheck(current), recent, { ...rules, ignore, ticRecent });
+        const text = shown(current);
+        let reason = checkReply(text, recent, { ...rules, ignore, ticRecent });
+        if (!reason && attempt > 0 && talksAboutRewrite(text)) reason = "it talks about the rewrite instead of just replying";
         if (!reason) {
-          await comments.add(chatId, kind, forCheck(current));
+          await comments.add(chatId, kind, text);
           return current;
         }
+        if (text !== "" && !(attempt > 0 && talksAboutRewrite(text))) fallback = current;
         if (attempt >= Math.min(MAX_REPLY_RETRIES, callsLeft)) {
           log.info({ chatId, kind, reason }, "reply still rejected after retries");
-          return deliveredBy ? "" : current;
+          // The delivery already spoke, so a failing comment is just dropped. An
+          // ordinary reply must still answer; record it so the next turn sees it.
+          if (deliveredBy) return "";
+          await comments.add(chatId, kind, shown(fallback));
+          return fallback;
         }
         log.info({ chatId, kind, reason }, "reply rejected; asking the model for another");
         const recentList = recent.slice(-5).map((r) => JSON.stringify(r)).join(" / ") || "(none)";
+        // This note and the rejected drafts live only in this call: nothing here
+        // reaches the transcript, the memory or the chat.
         convo = [
           ...convo,
           {
             role: "user",
-            content: `⟦harness · not a message from anyone⟧\nYour reply was rejected: ${reason}. ${instructionsFor(reason)} Avoid the wording of these recent messages: ${recentList}. Reply with the new text only.`,
+            content: [
+              "⟦harness · not a message from anyone in the chat⟧",
+              `Your last reply was not sent: ${reason}. ${instructionsFor(reason)}`,
+              `Avoid the wording of these recent messages: ${recentList}.`,
+              `Write only the replacement reply to ${input.speaker.displayName}, as if the rejected one never existed. Don't mention this note, a rewrite, a limit or a percentage.`,
+            ].join("\n"),
           },
         ];
         const { message } = await complete(convo, {});
@@ -389,6 +429,8 @@ export function createAgent({
       if (last?.role === "assistant" && !last.tool_calls?.length) added = [...added.slice(0, -1), { ...last, content: text }];
       await deliverText(text);
     }
+    // The answer is out; saving and compacting aren't "typing".
+    io.stopTyping?.();
 
     await transcript.appendTurn(chatId, [userEntry, ...entriesFromMessages(added, now())]);
     log.info({ chatId, llmCalls: result.calls, tools: result.toolCalls.map((c) => c.name) }, "turn done");
@@ -397,9 +439,30 @@ export function createAgent({
   }
 
   return {
-    handleTurn: (input, io) => store.withLock(`chat:${input.chat.id}`, () => runTurn(input, io)),
+    // The "typing…" status starts at once, even while this turn waits for an
+    // earlier one in the same chat, and stops as soon as the reply is out.
+    handleTurn: async (input, io) => {
+      const stopTyping = io.startTyping?.() ?? (() => {});
+      try {
+        return await store.withLock(`chat:${input.chat.id}`, () => runTurn(input, { ...io, stopTyping }));
+      } finally {
+        stopTyping();
+      }
+    },
 
     // Forgets the conversation of one chat. Long-term memory stays.
     reset: (chatId) => store.withLock(`chat:${chatId}`, () => transcript.clear(chatId)),
+
+    // A turn that failed sent the user an error notice the model never saw. Keep
+    // both in the transcript so a later "wtf?" reads as a reply to the bot's own
+    // message, not to some outside "system".
+    recordFailure: (input, notice) =>
+      store.withLock(`chat:${input.chat.id}`, async () => {
+        const candidates = await people.inChat(input.chat.id);
+        await transcript.appendTurn(input.chat.id, [
+          userEntryFor(input, [...candidates, input.speaker]),
+          { type: "assistant", ts: now().toISOString(), text: notice },
+        ]);
+      }),
   };
 }

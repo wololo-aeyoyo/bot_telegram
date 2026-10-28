@@ -49,7 +49,7 @@ const quoteText = (message, tally) => {
   return cap(scrub(raw, tally), REPLY_TEXT_MAX) || null;
 };
 
-export function turnInputFromMessage(message, { botId, text }) {
+export function turnInputFromMessage(message, { botId, botUsername = null, text }) {
   if (!message.from) throw new Error("message has no sender");
 
   const tally = { removed: 0 };
@@ -64,6 +64,20 @@ export function turnInputFromMessage(message, { botId, text }) {
       text: quoteText(reply, tally),
     };
   }
+
+  // @username mentions name people the model has to resolve. Usernames are
+  // [A-Za-z0-9_], so they are safe as they are. The bot's own handle is skipped.
+  const handles = [];
+  const collect = (entities, body) => {
+    for (const e of entities ?? []) {
+      if (e.type !== "mention") continue;
+      const handle = String(body ?? "").slice(e.offset + 1, e.offset + e.length).toLowerCase();
+      if (!/^\w{4,32}$/.test(handle) || handle === botUsername?.toLowerCase() || handles.includes(handle)) continue;
+      handles.push(handle);
+    }
+  };
+  collect(message.entities, message.text);
+  collect(message.caption_entities, message.caption);
 
   const mentioned = [];
   for (const entity of [...(message.entities ?? []), ...(message.caption_entities ?? [])]) {
@@ -81,6 +95,7 @@ export function turnInputFromMessage(message, { botId, text }) {
     speaker: personFromUser(message.from, tally),
     replyTo,
     mentioned,
+    handles,
     text: scrub(text, tally),
     messageId: message.message_id,
     date: new Date(message.date * 1000),
@@ -117,12 +132,18 @@ export function personLabel(p) {
 // in it as the speaker; the user cannot forge it because ⟦ is stripped from text.
 // The quote goes through JSON.stringify: its escaped quotation marks keep the
 // quoted text from ending the label early.
-export function speakerLabel({ from, replyTo, date, timezone }) {
+// mentions: [{ person }] for people the bot knows, [{ handle }] for an
+// @username it has never seen.
+export function speakerLabel({ from, replyTo, mentions = [], date, timezone }) {
   let label = `⟦from: ${personLabel(from)} · ${formatTime(date, timezone)}⟧`;
   if (replyTo) {
     const quote = replyTo.text ? `: ${JSON.stringify(replyTo.text)}` : "";
-    if (replyTo.isBot) label += `\n⟦replying to: you (the bot)${quote}⟧`;
+    if (replyTo.isBot) label += `\n⟦replying to your earlier message${quote}⟧`;
     else if (replyTo.user) label += `\n⟦replying to: ${personLabel(replyTo.user)}${quote}⟧`;
+  }
+  if (mentions.length) {
+    const names = mentions.map((m) => (m.person ? personLabel(m.person) : `@${m.handle} (unknown to you)`));
+    label += `\n⟦mentions: ${names.join("; ")}⟧`;
   }
   return label;
 }
